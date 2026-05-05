@@ -4,6 +4,7 @@
   <p>
     <a href="docs/validator.md">🔐 Validator Guide</a> &bull;
     <a href="docs/miner.md">🛠️ Miner Guide</a> &bull;
+    <a href="docs/training-benchmark.md">📦 Training Benchmark</a> &bull;
     <a href="https://poker44.net">🌐 Platform</a>
   </p>
 </div>
@@ -92,6 +93,7 @@ See:
 
 - [Miner Guide](docs/miner.md)
 - [Validator Guide](docs/validator.md)
+- [Training Benchmark](docs/training-benchmark.md)
 
 ---
 
@@ -145,6 +147,7 @@ Then follow:
 
 - [Validator setup](docs/validator.md)
 - [Miner setup](docs/miner.md)
+- [Training benchmark](docs/training-benchmark.md)
 
 Validated current production-like validator profile:
 
@@ -160,6 +163,7 @@ Validated current production-like validator profile:
 
 - Validator docs: [`docs/validator.md`](docs/validator.md)
 - Miner docs: [`docs/miner.md`](docs/miner.md)
+- Training benchmark docs: [`docs/training-benchmark.md`](docs/training-benchmark.md)
 
 ---
 
