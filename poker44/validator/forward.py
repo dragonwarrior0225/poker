@@ -30,7 +30,6 @@ from poker44.validator.constants import (
     BURN_FRACTION,
     KEEP_FRACTION,
     UID_ZERO,
-    WINNER_TAKE_ALL,
 )
 
 
@@ -705,37 +704,6 @@ def _select_weight_targets(reward_map: Dict[int, float]) -> tuple[List[int], np.
 
     sorted_rewards = sorted(reward_map.items(), key=lambda item: (-item[1], item[0]))
     winner_uid, winner_reward = sorted_rewards[0]
-
-    if not WINNER_TAKE_ALL:
-        positive = [(uid, max(0.0, float(reward))) for uid, reward in sorted_rewards]
-        positive = [(uid, reward) for uid, reward in positive if reward > 0.0]
-
-        if not positive:
-            bt.logging.info(
-                "No miner achieved positive reward; assigning 100%% to UID 0."
-            )
-            return [UID_ZERO], np.asarray([1.0], dtype=np.float32)
-
-        podium = positive[:3]
-        podium_splits = [0.5, 0.3, 0.2][: len(podium)]
-
-        if BURN_EMISSIONS:
-            uids = [UID_ZERO] + [uid for uid, _ in podium]
-            rewards = [BURN_FRACTION] + [KEEP_FRACTION * frac for frac in podium_splits]
-            bt.logging.info(
-                f"Podium mode + burn: UID 0 gets {BURN_FRACTION * 100:.2f}%, "
-                f"{KEEP_FRACTION * 100:.2f}% split across top {len(podium)} miner(s) "
-                f"with fixed shares {podium_splits}."
-            )
-            return uids, np.asarray(rewards, dtype=np.float32)
-
-        uids = [uid for uid, _ in podium]
-        rewards = podium_splits
-        bt.logging.info(
-            f"Podium mode: 100% split across top {len(podium)} miner(s) "
-            f"with fixed shares {podium_splits}."
-        )
-        return uids, np.asarray(rewards, dtype=np.float32)
 
     if winner_reward <= 0.0:
         bt.logging.info("No miner achieved positive reward; assigning 100%% to UID 0.")

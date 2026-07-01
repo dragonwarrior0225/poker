@@ -7,4 +7,4 @@ KEEP_FRACTION = 1.0 - BURN_FRACTION  # Fraction of emissions to distribute
 UID_ZERO = 0                       # UID representing the burn address
 
 # Reward distribution mechanism
-WINNER_TAKE_ALL = False            # Distribute emissions across a fixed podium
+WINNER_TAKE_ALL = True             # Winner-take-all emission distribution

@@ -9,7 +9,7 @@ class BurnWeightTests(unittest.TestCase):
         self.assertAlmostEqual(BURN_FRACTION, 0.00, places=6)
         self.assertAlmostEqual(KEEP_FRACTION, 1.00, places=6)
 
-    def test_podium_burn_assigns_uid_zero_and_top_three(self):
+    def test_winner_take_all_assigns_uid_zero_and_top_reward(self):
         reward_map = {
             1: 0.25,
             2: 0.8,
@@ -18,11 +18,9 @@ class BurnWeightTests(unittest.TestCase):
 
         uids, weights = _select_weight_targets(reward_map)
 
-        self.assertEqual(uids, [UID_ZERO, 2, 3, 1])
+        self.assertEqual(uids, [UID_ZERO, 2])
         self.assertAlmostEqual(float(weights[0]), BURN_FRACTION, places=6)
-        self.assertAlmostEqual(float(weights[1]), KEEP_FRACTION * 0.5, places=6)
-        self.assertAlmostEqual(float(weights[2]), KEEP_FRACTION * 0.3, places=6)
-        self.assertAlmostEqual(float(weights[3]), KEEP_FRACTION * 0.2, places=6)
+        self.assertAlmostEqual(float(weights[1]), KEEP_FRACTION, places=6)
         self.assertAlmostEqual(float(weights.sum()), 1.0, places=6)
 
     def test_burns_everything_when_no_positive_miner_rewards_exist(self):
