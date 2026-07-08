@@ -47,6 +47,17 @@ class Miner(BaseMinerNeuron):
             )
         repo_root = Path(__file__).resolve().parents[1]
         detector_meta = self.detector.metadata if self.detector else {}
+        try:
+            import subprocess
+
+            repo_commit = subprocess.run(
+                ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+        except Exception:  # noqa: BLE001
+            repo_commit = ""
         self.model_manifest = build_local_model_manifest(
             repo_root=repo_root,
             implementation_files=[
@@ -59,6 +70,7 @@ class Miner(BaseMinerNeuron):
                 "framework": f"scikit-learn/{detector_meta.get('algorithm', 'heuristic-fallback')}",
                 "license": "MIT",
                 "repo_url": "https://github.com/dragonwarrior0225/poker",
+                "repo_commit": repo_commit,
                 "notes": (
                     "Calibrated classifier over per-chunk hero-behavior features; "
                     "trained by scripts/miner/train_detector.py."
