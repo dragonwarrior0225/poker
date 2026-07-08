@@ -212,3 +212,4 @@ hands_for_validator/poker_hands_from_rar.json
 
 # Local Weights & Biases runs/artifacts
 wandb/
+benchmark_cache/

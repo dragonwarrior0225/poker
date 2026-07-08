@@ -1,4 +1,4 @@
-"""Reference Poker44 miner with simple chunk-level behavioral heuristics."""
+"""Poker44 miner scoring chunks with a trained behavioral bot detector."""
 
 # from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import Tuple
 
 import bittensor as bt
 
+from neurons.detector import MODEL_PATH, DetectorModel
 from poker44.base.miner import BaseMinerNeuron
 from poker44.utils.model_manifest import (
     build_local_model_manifest,
@@ -20,35 +21,59 @@ from poker44.validator.synapse import DetectionSynapse
 
 class Miner(BaseMinerNeuron):
     """
-    Reference heuristic miner.
+    Trained-model Poker44 miner.
 
-    It aggregates simple behavior signals over each chunk and returns a bot-risk
-    score per chunk. The goal is not SOTA accuracy, but a deterministic and
-    explainable baseline that is meaningfully better than random.
+    Scores each chunk with a calibrated classifier over hero-behavior features
+    (see neurons/detector.py), trained on the public Poker44 training
+    benchmark. Falls back to the original deterministic heuristic if the model
+    artifact is missing so the miner never returns malformed responses.
     """
 
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
-        bt.logging.info("🤖 Heuristic Poker44 Miner started")
+        self.detector = None
+        try:
+            self.detector = DetectorModel()
+            meta = self.detector.metadata
+            bt.logging.info(
+                f"🤖 Poker44 Miner started with trained detector "
+                f"(algorithm={meta.get('algorithm')} "
+                f"holdout_reward={meta.get('holdout_reward')})"
+            )
+        except Exception as exc:  # noqa: BLE001
+            bt.logging.warning(
+                f"Trained detector unavailable ({exc}); "
+                f"falling back to reference heuristic. Expected artifact: {MODEL_PATH}"
+            )
         repo_root = Path(__file__).resolve().parents[1]
+        detector_meta = self.detector.metadata if self.detector else {}
         self.model_manifest = build_local_model_manifest(
             repo_root=repo_root,
-            implementation_files=[Path(__file__).resolve()],
+            implementation_files=[
+                Path(__file__).resolve(),
+                Path(__file__).resolve().parent / "detector.py",
+            ],
             defaults={
-                "model_name": "poker44-reference-heuristic",
-                "model_version": "1",
-                "framework": "python-heuristic",
+                "model_name": "poker44-behavioral-detector",
+                "model_version": "2",
+                "framework": f"scikit-learn/{detector_meta.get('algorithm', 'heuristic-fallback')}",
                 "license": "MIT",
-                "repo_url": "https://github.com/Poker44/Poker44-subnet",
-                "notes": "Reference heuristic miner shipped with the Poker44 subnet.",
+                "repo_url": "https://github.com/dragonwarrior0225/poker",
+                "notes": (
+                    "Calibrated classifier over per-chunk hero-behavior features; "
+                    "trained by scripts/miner/train_detector.py."
+                ),
                 "open_source": True,
                 "inference_mode": "remote",
                 "training_data_statement": (
-                    "Reference heuristic miner. No training step. Uses only runtime chunk features."
+                    "Trained exclusively on the public Poker44 training benchmark "
+                    "(api.poker44.net/api/v1/benchmark), release dates "
+                    f"{detector_meta.get('train_dates', ['n/a'])[0]}.."
+                    f"{detector_meta.get('train_dates', ['n/a'])[-1]}."
                 ),
-                "training_data_sources": ["none"],
+                "training_data_sources": ["poker44-training-benchmark"],
                 "private_data_attestation": (
-                    "This reference miner does not train on validator-only evaluation data."
+                    "This miner does not train on validator-only evaluation data."
                 ),
             },
         )
@@ -89,14 +114,21 @@ class Miner(BaseMinerNeuron):
         )
 
     async def forward(self, synapse: DetectionSynapse) -> DetectionSynapse:
-        """Assign one deterministic bot-risk score per chunk."""
+        """Assign one calibrated bot-risk score per chunk."""
         chunks = synapse.chunks or []
-        scores = [self.score_chunk(chunk) for chunk in chunks]
+        if self.detector is not None:
+            try:
+                scores = self.detector.score_chunks(chunks)
+            except Exception as exc:  # noqa: BLE001
+                bt.logging.error(f"Detector inference failed ({exc}); using heuristic.")
+                scores = [self.score_chunk(chunk) for chunk in chunks]
+        else:
+            scores = [self.score_chunk(chunk) for chunk in chunks]
         synapse.risk_scores = scores
         synapse.predictions = [s >= 0.5 for s in scores]
         synapse.model_manifest = dict(self.model_manifest)
-        bt.logging.info(f"Miner Predctions: {synapse.predictions}")
-        bt.logging.info(f"Scored {len(chunks)} chunks with heuristic risks.")
+        bt.logging.info(f"Miner Predictions: {synapse.predictions}")
+        bt.logging.info(f"Scored {len(chunks)} chunks.")
         return synapse
 
     @staticmethod
