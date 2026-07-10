@@ -57,6 +57,7 @@ from neurons.detector import (  # noqa: E402
     hand_feature_matrix,
 )
 from poker44.score.scoring import _recall_at_fpr, reward  # noqa: E402
+from poker44.validator.payload_view import prepare_hand_for_miner  # noqa: E402
 
 warnings.filterwarnings("ignore")
 SEED = 44
@@ -67,13 +68,31 @@ N_SEARCH_PER_FAMILY = 18
 # ---------------------------------------------------------------- data
 
 
+def to_miner_visible(group):
+    """Project a raw benchmark group through the exact canonicalizer the
+    validator applies before sending hands to miners (windowed actions,
+    coarsened amounts, aliased seats, suppressed identity fields).
+
+    Training on the raw benchmark payload while the validator scores the
+    miner-visible projection is a train/serve skew that inflates hard_fpr
+    and collapses reward. We train on the projection so the feature
+    distribution matches what the model actually sees live.
+    """
+    return [prepare_hand_for_miner(h) for h in group]
+
+
 def load_dataset(cache_dir: Path):
-    """Group features, labels, dates, plus per-group hand feature matrices."""
+    """Group features, labels, dates, plus per-group hand feature matrices.
+
+    Every group is projected to the validator's miner-visible payload first
+    so training and serving see the same feature distribution.
+    """
     Xg, y, dates, hand_mats = [], [], [], []
     for path in sorted(cache_dir.glob("*.json")):
         date = path.stem
         for record in json.loads(path.read_text()):
             for group, label in zip(record["chunks"], record["groundTruth"]):
+                group = to_miner_visible(group)
                 Xg.append(extract_features(group))
                 hand_mats.append(hand_feature_matrix(group))
                 y.append(int(label))
