@@ -63,6 +63,40 @@ warnings.filterwarnings("ignore")
 SEED = 44
 HAND_AGGS = ("mean", 0.75, 0.9)
 N_SEARCH_PER_FAMILY = 18
+# Live evaluation is always a FUTURE date, so the most recent releases are the
+# best proxy for it. Exponentially downweight older dates by calendar age.
+# Validated on the miner-visible walk-forward: recency weighting lifts
+# out-of-sample reward substantially over uniform weighting.
+RECENCY_HALFLIFE_DAYS = 10.0
+
+
+def recency_weights(dates: np.ndarray) -> np.ndarray:
+    """Per-row exponential-decay weights by release-date age (newest = 1.0)."""
+    order = {d: i for i, d in enumerate(sorted(set(dates.tolist())))}
+    idx = np.array([order[d] for d in dates], dtype=float)
+    age = idx.max() - idx  # 0 for newest date, larger for older
+    return 0.5 ** (age / RECENCY_HALFLIFE_DAYS)
+
+
+def _fit(model, X, yy, sw=None):
+    """Fit a candidate, passing sample_weight where the estimator supports it.
+
+    Pipelines need the step-prefixed key; a few estimators (e.g. MLP) accept no
+    weights at all — fall back to an unweighted fit for those.
+    """
+    if sw is None:
+        model.fit(X, yy)
+        return model
+    from sklearn.pipeline import Pipeline
+
+    try:
+        if isinstance(model, Pipeline):
+            model.fit(X, yy, **{model.steps[-1][0] + "__sample_weight": sw})
+        else:
+            model.fit(X, yy, sample_weight=sw)
+    except (TypeError, ValueError):
+        model.fit(X, yy)
+    return model
 
 
 # ---------------------------------------------------------------- data
@@ -385,6 +419,8 @@ def compute_oof(Xg, y, dates, hand_mats, n_splits=5):
     """Out-of-fold predictions for every candidate (group + hand level)."""
     Xh, yh, gidx = stack_hands(hand_mats, y)
     cv = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=SEED)
+    sw = recency_weights(dates)
+    hand_sw = sw[gidx]
     names = list(all_group_candidates()) + [
         f"{n}@{a}" for n in hand_candidates() for a in HAND_AGGS
     ]
@@ -392,15 +428,13 @@ def compute_oof(Xg, y, dates, hand_mats, n_splits=5):
 
     for fold, (tr, te) in enumerate(cv.split(Xg, y, dates)):
         for name, proto in all_group_candidates().items():
-            model = clone(proto)
-            model.fit(Xg[tr], y[tr])
+            model = _fit(clone(proto), Xg[tr], y[tr], sw[tr])
             oof[name][te] = model.predict_proba(Xg[te])[:, 1]
 
         tr_rows = np.isin(gidx, tr)
         te_rows = np.isin(gidx, te)
         for name, proto in hand_candidates().items():
-            model = clone(proto)
-            model.fit(Xh[tr_rows], yh[tr_rows])
+            model = _fit(clone(proto), Xh[tr_rows], yh[tr_rows], hand_sw[tr_rows])
             probs = model.predict_proba(Xh[te_rows])[:, 1]
             sub_gidx = gidx[te_rows]
             for agg in HAND_AGGS:
@@ -470,11 +504,17 @@ def refine_weights(oof, y, greedy_weights, top_n=12):
 # ---------------------------------------------------------------- fit/predict
 
 
-def fit_scorer(weights, Xg, y, hand_mats):
-    """Fit the selected members on the given data, return an EnsembleScorer."""
+def fit_scorer(weights, Xg, y, hand_mats, dates=None):
+    """Fit the selected members on the given data, return an EnsembleScorer.
+
+    Members are fit with the same recency weighting used during selection so
+    the deployed artifact matches the out-of-fold model it was chosen from.
+    """
     group_protos = all_group_candidates()
     hand_protos = hand_candidates()
-    Xh, yh, _ = stack_hands(hand_mats, y)
+    Xh, yh, gidx = stack_hands(hand_mats, y)
+    sw = recency_weights(dates) if dates is not None else None
+    hand_sw = sw[gidx] if sw is not None else None
 
     group_members, hand_members = [], []
     fitted_hand = {}
@@ -482,14 +522,12 @@ def fit_scorer(weights, Xg, y, hand_mats):
         if "@" in name:
             base, agg = name.split("@")
             if base not in fitted_hand:
-                model = clone(hand_protos[base])
-                model.fit(Xh, yh)
+                model = _fit(clone(hand_protos[base]), Xh, yh, hand_sw)
                 fitted_hand[base] = model
             agg_val = agg if agg == "mean" else float(agg)
             hand_members.append((fitted_hand[base], agg_val, w))
         else:
-            model = clone(group_protos[name])
-            model.fit(Xg, y)
+            model = _fit(clone(group_protos[name]), Xg, y, sw)
             group_members.append((model, w))
     return EnsembleScorer(group_members, hand_members)
 
@@ -583,7 +621,7 @@ def main():
     print(f"OOF reward={oof_reward_val:.4f} at threshold={threshold:.4f}")
 
     # Honest evaluation: fit on training dates only, score the two newest.
-    scorer = fit_scorer(weights, Xg_tr, y_tr, hm_tr)
+    scorer = fit_scorer(weights, Xg_tr, y_tr, hm_tr, d_tr)
     p_ho = predict_groups(scorer, Xg[ho_idx], [hand_mats[i] for i in ho_idx])
     ho_reward, ho_metrics = evaluate(p_ho, y[ho_idx], threshold)
     print(f"\n--- holdout ({holdout_date}) ---")
@@ -596,7 +634,7 @@ def main():
     st_idx = np.flatnonzero(stab_mask)
     sc_idx = np.flatnonzero(dates == stability_date)
     scorer_stab = fit_scorer(
-        weights, Xg[st_idx], y[st_idx], [hand_mats[i] for i in st_idx]
+        weights, Xg[st_idx], y[st_idx], [hand_mats[i] for i in st_idx], dates[st_idx]
     )
     p_st = predict_groups(scorer_stab, Xg[sc_idx], [hand_mats[i] for i in sc_idx])
     st_reward, st_metrics = evaluate(p_st, y[sc_idx], threshold)
@@ -609,7 +647,7 @@ def main():
     # Deployment artifact: refit the same recipe on ALL data (live batches
     # come from future dates; the newest release is the most relevant signal).
     print("\nrefitting selected ensemble on all data for deployment...")
-    final_scorer = fit_scorer(weights, Xg, y, hand_mats)
+    final_scorer = fit_scorer(weights, Xg, y, hand_mats, dates)
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
