@@ -125,6 +125,32 @@ class Miner(BaseMinerNeuron):
             f"miner_doc={repo_root / 'docs' / 'miner.md'}"
         )
 
+    def _capture_payload(self, chunks, scores) -> None:
+        """Persist live validator payloads for train/serve-skew diagnosis.
+
+        Best-effort only: capture failures must never affect the response.
+        Rolling cap keeps disk usage bounded.
+        """
+        try:
+            import json
+
+            cap_dir = Path(__file__).resolve().parents[1] / "data" / "live_payloads"
+            cap_dir.mkdir(parents=True, exist_ok=True)
+            existing = sorted(cap_dir.glob("cycle_*.json"))
+            while len(existing) >= 200:  # rolling cap (~200 cycles)
+                existing.pop(0).unlink()
+            stamp = time.strftime("%Y%m%dT%H%M%S")
+            sizes = [len(c or []) for c in chunks]
+            bt.logging.info(
+                f"Live payload | chunks={len(chunks)} hands_per_chunk "
+                f"min={min(sizes) if sizes else 0} max={max(sizes) if sizes else 0} "
+                f"total={sum(sizes)}"
+            )
+            out = cap_dir / f"cycle_{stamp}.json"
+            out.write_text(json.dumps({"ts": stamp, "chunks": chunks, "scores": scores}))
+        except Exception as exc:  # noqa: BLE001
+            bt.logging.debug(f"Payload capture skipped: {exc}")
+
     async def forward(self, synapse: DetectionSynapse) -> DetectionSynapse:
         """Assign one calibrated bot-risk score per chunk."""
         chunks = synapse.chunks or []
@@ -139,6 +165,7 @@ class Miner(BaseMinerNeuron):
         synapse.risk_scores = scores
         synapse.predictions = [s >= 0.5 for s in scores]
         synapse.model_manifest = dict(self.model_manifest)
+        self._capture_payload(chunks, scores)
         bt.logging.info(f"Miner Predictions: {synapse.predictions}")
         bt.logging.info(f"Scored {len(chunks)} chunks.")
         return synapse
