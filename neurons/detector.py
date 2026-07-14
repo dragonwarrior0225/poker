@@ -403,6 +403,205 @@ def feature_names() -> List[str]:
     )
 
 
+# --------------------------------------------------------------- features v4
+#
+# The live generator runs a different scale regime than the training benchmark
+# (pots ~14x smaller, stacks pinned at 100bb, 7-max tables): 86/173 v3 features
+# have KS>0.5 between live capture and benchmark. v4 keeps only the KS<=0.25
+# subset of v3 (behavioral ratios/transition bigrams) and adds scale-free
+# features built from shares, pot fractions, the validator's bet-size bucket
+# grid, and template-replay redundancy. Serving pairs these with within-request
+# percentile ranks (V4RankEnsemble), so tree splits never see absolute scale.
+
+# KS<=0.25 columns of extract_features() vs the 2026-07-14 live capture.
+V4_STABLE_IDX = (
+    0, 1, 2, 3, 4, 5, 6, 8, 11, 13, 16, 17, 19, 20, 22, 25, 30, 32, 33, 36,
+    43, 44, 45, 51, 60, 61, 67, 72, 75, 76, 77, 78, 79, 80, 82, 85, 87, 90,
+    91, 93, 94, 96, 99, 104, 106, 107, 110, 117, 119, 125, 134, 135, 141,
+    146, 165, 166, 168,
+)
+
+# The validator's miner-visible sanitizer snaps normalized_amount_bb onto this
+# grid and adds hash noise; snapping back cancels the noise exactly.
+_SIZE_BUCKET_GRID = np.asarray(
+    (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 36.0,
+     56.0, 84.0, 126.0)
+)
+_POT_TARGETS = (0.25, 0.33, 0.5, 0.66, 0.75, 1.0)
+
+
+def _v4_extra_features(chunk: List[dict]) -> List[float]:
+    """Scale-free live-robust features (see module comment above)."""
+    import zlib
+
+    n_hands = max(len(chunk), 1)
+    hero_visible = 0
+    n_actions_per_hand = []
+    street_counts = {s: 0 for s in _STREETS}
+    type_counts = {t: 0 for t in _ACTION_TYPES}
+    bucket_idx: List[int] = []
+    pot_ratios: List[float] = []
+    signatures: List[tuple] = []
+    bigram_sets: List[frozenset] = []
+    token_stream: List[str] = []
+    total_actions = 0
+
+    for hand in chunk:
+        meta = (hand or {}).get("metadata") or {}
+        hero = meta.get("hero_seat")
+        actions = (hand or {}).get("actions") or []
+        n_actions_per_hand.append(len(actions))
+        sig = []
+        for a in actions:
+            at = a.get("action_type")
+            st = a.get("street")
+            total_actions += 1
+            if at in type_counts:
+                type_counts[at] += 1
+            if st in street_counts:
+                street_counts[st] += 1
+            if a.get("actor_seat") == hero:
+                hero_visible += 1  # counts hero actions; >0 => visible
+            tok = f"{(st or '?')[0]}{(at or '?')[0]}"
+            sig.append(tok)
+            token_stream.append(tok)
+            amt = float(a.get("normalized_amount_bb") or 0.0)
+            if amt > 0 and at in ("call", "bet", "raise"):
+                bucket_idx.append(int(np.argmin(np.abs(_SIZE_BUCKET_GRID - amt))))
+                pot_before = float(a.get("pot_before") or 0.0)
+                raw_amt = float(a.get("amount") or 0.0)
+                if pot_before > 0 and raw_amt > 0:
+                    pot_ratios.append(raw_amt / pot_before)
+        sig_t = tuple(sig)
+        signatures.append(sig_t)
+        bigram_sets.append(frozenset(zip(sig, sig[1:])) if len(sig) > 1 else frozenset())
+
+    hero_hand_share = sum(
+        1
+        for hand in chunk
+        if any(
+            a.get("actor_seat") == ((hand or {}).get("metadata") or {}).get("hero_seat")
+            for a in (hand or {}).get("actions") or []
+        )
+    ) / n_hands
+    aph = np.asarray(n_actions_per_hand, dtype=float)
+    ta = max(total_actions, 1)
+    street_shares = [street_counts[s] / ta for s in _STREETS]
+    type_shares = [type_counts[t] / ta for t in _ACTION_TYPES]
+
+    # Bet-size bucket profile (grid-snapped => noise-free).
+    bucket_feats: List[float] = []
+    if bucket_idx:
+        counts = np.bincount(bucket_idx, minlength=len(_SIZE_BUCKET_GRID)).astype(float)
+        shares = counts / counts.sum()
+        probs = shares[shares > 0]
+        bucket_feats = [
+            *shares[:8].tolist(),
+            float(-(probs * np.log(probs)).sum()),
+            float(shares.max()),
+            float((shares > 0).sum() / len(_SIZE_BUCKET_GRID)),
+            float(np.mean(bucket_idx)),
+        ]
+    else:
+        bucket_feats = [0.0] * 12
+
+    # Pot-fraction profile: fractions cancel the absolute pot scale, and bots
+    # quantize on canonical pot targets.
+    if pot_ratios:
+        pr = np.asarray(pot_ratios)
+        on_target = float(
+            np.mean(
+                np.min(np.abs(pr[:, None] - np.asarray(_POT_TARGETS)[None, :]), axis=1)
+                < 0.05
+            )
+        )
+        pot_feats = [
+            float(np.quantile(pr, 0.25)),
+            float(np.quantile(pr, 0.5)),
+            float(np.quantile(pr, 0.75)),
+            float(pr.mean()),
+            float(_safe_div(pr.std(), pr.mean())),
+            on_target,
+        ]
+    else:
+        pot_feats = [0.0] * 6
+
+    # Template-replay redundancy: bots repeat identical lines.
+    uniq_sig = len(set(signatures))
+    dup_share = 1.0 - uniq_sig / n_hands
+    stream = "".join(token_stream).encode()
+    zratio = len(zlib.compress(stream)) / max(len(stream), 1)
+    rng = np.random.default_rng(0)
+    jac = []
+    if len(bigram_sets) > 1:
+        pairs = min(200, len(bigram_sets) * (len(bigram_sets) - 1) // 2)
+        for _ in range(pairs):
+            i, j = rng.choice(len(bigram_sets), 2, replace=False)
+            a, b = bigram_sets[i], bigram_sets[j]
+            u = len(a | b)
+            jac.append(len(a & b) / u if u else 0.0)
+    mean_jaccard = float(np.mean(jac)) if jac else 0.0
+    tri = {}
+    for s in signatures:
+        for k in zip(s, s[1:], s[2:]):
+            tri[k] = tri.get(k, 0) + 1
+    tri_top = max(tri.values()) / max(sum(tri.values()), 1) if tri else 0.0
+
+    return [
+        float(hero_hand_share),
+        float(aph.mean()) if aph.size else 0.0,
+        float(aph.std()) if aph.size else 0.0,
+        *street_shares,
+        *type_shares,
+        *bucket_feats,
+        *pot_feats,
+        float(dup_share),
+        float(zratio),
+        mean_jaccard,
+        float(tri_top),
+    ]
+
+
+def extract_features_v4(chunk: List[dict]) -> np.ndarray:
+    """Drift-robust chunk features: stable v3 subset + scale-free extras."""
+    base = extract_features(chunk)
+    return np.concatenate(
+        [base[list(V4_STABLE_IDX)], np.asarray(_v4_extra_features(chunk), dtype=float)]
+    )
+
+
+class V4RankEnsemble:
+    """Weighted blend over [v4 features, within-request percentile ranks].
+
+    predict_chunks must receive ALL segments of one validator request in a
+    single call: the rank channel is computed across that call's rows, which
+    is what makes the model invariant to any monotone per-feature drift
+    between the training benchmark and the live generator.
+    """
+
+    def __init__(self, members):
+        self.members = members  # [(fitted model, weight)]
+
+    @staticmethod
+    def rank_augment(X: np.ndarray) -> np.ndarray:
+        n = X.shape[0]
+        if n <= 1:
+            ranks = np.full_like(X, 0.5)
+        else:
+            order = np.argsort(np.argsort(X, axis=0), axis=0)
+            ranks = order / (n - 1)
+        return np.hstack([X, ranks])
+
+    def predict_chunks(self, chunks: List[List[dict]]) -> np.ndarray:
+        X = np.vstack([extract_features_v4(c) for c in chunks])
+        Xr = self.rank_augment(X)
+        total_w = sum(w for _, w in self.members)
+        blended = np.zeros(X.shape[0], dtype=float)
+        for model, w in self.members:
+            blended += w * model.predict_proba(Xr)[:, 1]
+        return blended / max(total_w, 1e-12)
+
+
 class EnsembleScorer:
     """Weighted blend of group-level and hand-level classifiers.
 
