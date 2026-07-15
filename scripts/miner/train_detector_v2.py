@@ -11,7 +11,8 @@ Design (evidence: live capture 2026-07-14 + competitor convergence):
 - Rows per date: real projected groups (~30-40 hands) + pooled same-label
   units (86-102 hands, mimicking live chunks) + contiguous subsets (15-21
   hands, mimicking odd segments).
-- Validation: walk-forward on the last 3 dates; reward simulated at live
+- Validation: strictly temporal model/policy selection, then walk-forward on
+  the last 5 dates; reward simulated at live
   geometry (pooled units -> segmented serve -> top-15% budget) under the
   CURRENT validator formula.
 
@@ -31,6 +32,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from neurons.detector import (  # noqa: E402
     DetectorModel,
+    HumanAnomalyDetector,
     V4RankEnsemble,
     extract_features_v4,
 )
@@ -43,7 +45,9 @@ POOL_RANGE = (86, 102)
 SUBSET_RANGE = (15, 21)
 POOLS_PER_LABEL = 3
 TARGET_FPR = 0.045
-WF_DATES = 3
+WF_DATES = 5
+REGIME_START = "2026-07-06"
+TRAIN_POLICIES = ("all_history", "current_regime")
 
 
 def project(group):
@@ -132,6 +136,10 @@ def candidates():
         n_estimators=500, max_depth=None, min_samples_leaf=3,
         random_state=SEED, n_jobs=-1,
     )
+    c["human_iso"] = HumanAnomalyDetector(
+        n_estimators=400,
+        random_state=SEED,
+    )
     return c
 
 
@@ -150,16 +158,25 @@ def rank_objective(scores, labels):
     return 0.35 * ap + 0.30 * r5
 
 
-def oof_scores(Xr, y, dates, models, train_mask_extra=None):
-    """Leave-one-date-out OOF for weight/threshold selection (last 10 dates)."""
+def oof_scores(Xr, y, dates, models, train_policy):
+    """Strictly temporal OOF predictions for model and data-policy selection.
+
+    The previous leave-one-date-out implementation trained each fold on future
+    releases.  That made ensemble weights optimistic under benchmark drift.
+    These folds only train on releases older than the scored release.
+    """
     uniq = np.unique(dates)
-    eval_dates = uniq[-10:]
+    eval_dates = uniq[-WF_DATES:]
     oof = {k: np.full(len(y), np.nan) for k in models}
     for d in eval_dates:
+        tr = dates < d
+        if train_policy == "current_regime":
+            tr &= dates >= REGIME_START
+        elif train_policy != "all_history":
+            raise ValueError(f"unknown train policy: {train_policy}")
         te = dates == d
-        tr = ~te
-        if train_mask_extra is not None:
-            tr &= train_mask_extra
+        if np.unique(y[tr]).size < 2:
+            continue
         for k, proto in models.items():
             import copy
 
@@ -192,6 +209,21 @@ def greedy_weights(oof, mask, y, kinds):
     return weights, best_obj
 
 
+def temporal_policy_score(oof, mask, y, dates, kinds, weights):
+    """Mean rank objective across dates, so large releases cannot dominate."""
+    score_rows = mask & np.isin(kinds, ("real", "pooled"))
+    total_weight = sum(weights.values())
+    blended = np.zeros(len(y))
+    for key, weight in weights.items():
+        blended += weight * np.nan_to_num(oof[key], nan=0.0)
+    blended /= max(total_weight, 1e-12)
+    per_date = []
+    for date in np.unique(dates[score_rows]):
+        date_rows = score_rows & (dates == date)
+        per_date.append(rank_objective(blended[date_rows], y[date_rows]))
+    return float(np.mean(per_date)), blended, per_date
+
+
 def main():
     cache_dir = Path(sys.argv[1])
     print("loading rows (real + pooled live-size + subsets)...", flush=True)
@@ -202,16 +234,39 @@ def main():
           flush=True)
 
     models = candidates()
-    print("computing leave-one-date-out OOF (last 10 dates)...", flush=True)
-    oof, mask = oof_scores(Xr, y, dates, models)
-    weights, obj = greedy_weights(oof, mask, y, kinds)
-    print(f"greedy ensemble rank_obj={obj:.4f} weights={weights}", flush=True)
+    print("selecting training policy with strictly temporal OOF...", flush=True)
+    policy_results = {}
+    for policy in TRAIN_POLICIES:
+        oof, mask = oof_scores(Xr, y, dates, models, policy)
+        policy_weights, pooled_obj = greedy_weights(oof, mask, y, kinds)
+        mean_obj, blended, per_date = temporal_policy_score(
+            oof, mask, y, dates, kinds, policy_weights
+        )
+        policy_results[policy] = {
+            "oof": oof,
+            "mask": mask,
+            "weights": policy_weights,
+            "pooled_obj": pooled_obj,
+            "mean_obj": mean_obj,
+            "blended": blended,
+            "per_date": per_date,
+        }
+        print(
+            f"  {policy}: temporal_mean={mean_obj:.4f} "
+            f"pooled={pooled_obj:.4f} weights={policy_weights}",
+            flush=True,
+        )
+    train_policy = max(
+        policy_results, key=lambda key: policy_results[key]["mean_obj"]
+    )
+    selected = policy_results[train_policy]
+    oof = selected["oof"]
+    mask = selected["mask"]
+    weights = selected["weights"]
+    obj = selected["pooled_obj"]
+    blended = selected["blended"]
+    print(f"selected training policy: {train_policy}", flush=True)
 
-    blended = np.zeros(len(y))
-    tw = sum(weights.values())
-    for k, w in weights.items():
-        blended += w * np.nan_to_num(oof[k], nan=0.0)
-    blended /= tw
     human_scores = blended[mask & (y == 0) & np.isin(kinds, ("real", "pooled"))]
     threshold = float(np.quantile(human_scores, 1 - TARGET_FPR))
     threshold = min(max(threshold, 1e-4), 1 - 1e-4)
@@ -223,6 +278,8 @@ def main():
     wf_rewards = []
     for d in uniq[-WF_DATES:]:
         tr = dates < d
+        if train_policy == "current_regime":
+            tr &= dates >= REGIME_START
         members = []
         import copy
 
@@ -259,14 +316,20 @@ def main():
               f"n_units={len(units)}", flush=True)
     print(f"  MEAN live-sim reward = {np.mean(wf_rewards):.4f}", flush=True)
 
-    # ---- final refit on all data ----
-    print("\nrefitting on all data for deployment...", flush=True)
+    # ---- final refit using the temporally selected data policy ----
+    fit_rows = np.ones(len(y), dtype=bool)
+    if train_policy == "current_regime":
+        fit_rows &= dates >= REGIME_START
+    print(
+        f"\nrefitting on {fit_rows.sum()} selected rows for deployment...",
+        flush=True,
+    )
     import copy
 
     members = []
     for k, w in weights.items():
         m = copy.deepcopy(models[k])
-        m.fit(Xr, y)
+        m.fit(Xr[fit_rows], y[fit_rows])
         members.append((m, w))
     ens = V4RankEnsemble(members)
 
@@ -278,9 +341,19 @@ def main():
         "metadata": {
             "algorithm": "v4-rank-ensemble",
             "feature_version": 4,
+            "training_policy": train_policy,
+            "regime_start": REGIME_START,
             "ensemble_weights": weights,
             "oof_rank_objective": float(obj),
+            "temporal_mean_rank_objective": float(selected["mean_obj"]),
+            "temporal_rank_objectives": [
+                float(value) for value in selected["per_date"]
+            ],
             "walk_forward_live_sim_rewards": [float(r) for r in wf_rewards],
+            "train_dates": [
+                str(np.unique(dates[fit_rows])[0]),
+                str(np.unique(dates[fit_rows])[-1]),
+            ],
             "trained_through": str(uniq[-1]),
             "target_fpr": TARGET_FPR,
         },

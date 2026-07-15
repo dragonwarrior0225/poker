@@ -2,6 +2,7 @@
 
 # from __future__ import annotations
 
+import hashlib
 import time
 from collections import Counter
 from pathlib import Path
@@ -47,6 +48,13 @@ class Miner(BaseMinerNeuron):
             )
         repo_root = Path(__file__).resolve().parents[1]
         detector_meta = self.detector.metadata if self.detector else {}
+        train_dates = detector_meta.get("train_dates") or [
+            detector_meta.get("regime_start", "n/a"),
+            detector_meta.get("trained_through", "n/a"),
+        ]
+        artifact_sha256 = ""
+        if MODEL_PATH.is_file():
+            artifact_sha256 = hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest()
         try:
             import subprocess
 
@@ -63,25 +71,27 @@ class Miner(BaseMinerNeuron):
             implementation_files=[
                 Path(__file__).resolve(),
                 Path(__file__).resolve().parent / "detector.py",
+                repo_root / "scripts" / "miner" / "train_detector_v2.py",
             ],
             defaults={
-                "model_name": "poker44-behavioral-detector",
-                "model_version": "2",
+                "model_name": "poker44-rank-behavioral-ensemble",
+                "model_version": str(detector_meta.get("feature_version", "fallback")),
                 "framework": f"scikit-learn/{detector_meta.get('algorithm', 'heuristic-fallback')}",
                 "license": "MIT",
                 "repo_url": "https://github.com/dragonwarrior0225/poker",
                 "repo_commit": repo_commit,
+                "artifact_sha256": artifact_sha256,
                 "notes": (
-                    "Calibrated classifier over per-chunk hero-behavior features; "
-                    "trained by scripts/miner/train_detector.py."
+                    "Drift-robust rank ensemble over per-chunk hero behavior, "
+                    "trained with strict temporal model and data-policy selection "
+                    "by scripts/miner/train_detector_v2.py."
                 ),
                 "open_source": True,
                 "inference_mode": "remote",
                 "training_data_statement": (
                     "Trained exclusively on the public Poker44 training benchmark "
                     "(api.poker44.net/api/v1/benchmark), release dates "
-                    f"{detector_meta.get('train_dates', ['n/a'])[0]}.."
-                    f"{detector_meta.get('train_dates', ['n/a'])[-1]}."
+                    f"{train_dates[0]}..{train_dates[-1]}."
                 ),
                 "training_data_sources": ["poker44-training-benchmark"],
                 "private_data_attestation": (

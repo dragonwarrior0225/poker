@@ -570,6 +570,50 @@ def extract_features_v4(chunk: List[dict]) -> np.ndarray:
     )
 
 
+class HumanAnomalyDetector:
+    """Human-only Isolation Forest exposed as a classifier-like candidate.
+
+    Supervised models recognize known bot families.  This complementary arm
+    instead learns the current human manifold and assigns high bot risk to
+    behavior outside it.  Scores are converted to empirical percentiles of the
+    training-human anomaly distribution, making them comparable across folds.
+    """
+
+    def __init__(self, n_estimators: int = 400, random_state: int = 44):
+        self.n_estimators = n_estimators
+        self.random_state = random_state
+        self.model = None
+        self.human_reference = np.zeros(0, dtype=float)
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        from sklearn.ensemble import IsolationForest
+
+        human = np.asarray(X)[np.asarray(y) == 0]
+        if human.shape[0] < 2:
+            raise ValueError("HumanAnomalyDetector requires at least two human rows")
+        self.model = IsolationForest(
+            n_estimators=self.n_estimators,
+            max_samples=min(512, human.shape[0]),
+            max_features=0.75,
+            contamination="auto",
+            random_state=self.random_state,
+            n_jobs=-1,
+        )
+        self.model.fit(human)
+        self.human_reference = np.sort(-self.model.score_samples(human))
+        return self
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        if self.model is None or self.human_reference.size == 0:
+            raise RuntimeError("HumanAnomalyDetector is not fitted")
+        anomaly = -self.model.score_samples(np.asarray(X))
+        risk = np.searchsorted(
+            self.human_reference, anomaly, side="right"
+        ) / self.human_reference.size
+        risk = np.clip(risk, 0.0, 1.0)
+        return np.column_stack([1.0 - risk, risk])
+
+
 class V4RankEnsemble:
     """Weighted blend over [v4 features, within-request percentile ranks].
 
