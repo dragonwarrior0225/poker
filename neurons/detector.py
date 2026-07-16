@@ -768,6 +768,15 @@ class DetectorModel:
     def score_chunks(self, chunks: List[List[dict]]) -> List[float]:
         if not chunks:
             return []
+        # PT2Bag (UID138-style) already remaps to 0.5 and applies a rank-preserving
+        # positive cap on whole live-size chunks. Do not re-segment or force a
+        # second safety budget on top of that path.
+        from neurons.pt2bag.serving import PT2BagScorer
+
+        if isinstance(self.model, PT2BagScorer):
+            scores = np.asarray(self.model.predict_chunks(chunks), dtype=float)
+            return [float(round(s, 6)) for s in scores]
+
         # Segmented inference: score benchmark-sized views of each chunk and
         # aggregate per chunk as the mean of the top-SEGMENT_TOP_K segments.
         # Keeps the ensemble in its trained ~35-hand regime on live ~90-hand

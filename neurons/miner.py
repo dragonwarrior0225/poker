@@ -71,20 +71,29 @@ class Miner(BaseMinerNeuron):
             implementation_files=[
                 Path(__file__).resolve(),
                 Path(__file__).resolve().parent / "detector.py",
-                repo_root / "scripts" / "miner" / "train_detector_v2.py",
+                Path(__file__).resolve().parent / "pt2bag" / "pt_model.py",
+                Path(__file__).resolve().parent / "pt2bag" / "pt_features.py",
+                Path(__file__).resolve().parent / "pt2bag" / "serving.py",
+                Path(__file__).resolve().parent / "pt2bag" / "features_v2.py",
+                Path(__file__).resolve().parent / "pt2bag" / "schema_features.py",
+                repo_root / "scripts" / "miner" / "train_pt2.py",
             ],
             defaults={
-                "model_name": "poker44-rank-behavioral-ensemble",
-                "model_version": str(detector_meta.get("feature_version", "fallback")),
-                "framework": f"scikit-learn/{detector_meta.get('algorithm', 'heuristic-fallback')}",
+                "model_name": "perturb-poker-2",
+                "model_version": str(detector_meta.get("feature_version", "pt.v1")),
+                "framework": f"xgboost+sklearn/{detector_meta.get('algorithm', 'PT2Bag')}",
                 "license": "MIT",
                 "repo_url": "https://github.com/dragonwarrior0225/poker",
                 "repo_commit": repo_commit,
                 "artifact_sha256": artifact_sha256,
                 "notes": (
-                    "Drift-robust rank ensemble over per-chunk hero behavior, "
-                    "trained with strict temporal model and data-policy selection "
-                    "by scripts/miner/train_detector_v2.py."
+                    "UID138-style PT2Bag: 6 perturbed XGBoosts (72%) + "
+                    "2× PCA(50)→MLP(64) (28%), rank-blended; sanitize "
+                    "train==serve; live-size pool/subset aug; human-quantile "
+                    "threshold remap to 0.5 plus force top-K (15%) safety "
+                    "budget so every batch has scores >=0.5 (blocks reward "
+                    "0.0 from zero-TP threshold-sanity failure). Trained by "
+                    "scripts/miner/train_pt2.py."
                 ),
                 "open_source": True,
                 "inference_mode": "remote",
