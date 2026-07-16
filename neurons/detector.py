@@ -768,12 +768,15 @@ class DetectorModel:
     def score_chunks(self, chunks: List[List[dict]]) -> List[float]:
         if not chunks:
             return []
-        # PT2Bag (UID138-style) already remaps to 0.5 and applies a rank-preserving
-        # positive cap on whole live-size chunks. Do not re-segment or force a
-        # second safety budget on top of that path.
+        # PT2Bag (UID138-style) and VoteScorer (UID111-style) already apply
+        # their own batch-level decision layer (threshold remap + positive
+        # cap, or rank/logit quantile-anchor + floor/cap) directly on whole
+        # live-size chunks. Do not re-segment or force a second safety
+        # budget on top of either path.
         from neurons.pt2bag.serving import PT2BagScorer
+        from neurons.vote111.serving import VoteScorer
 
-        if isinstance(self.model, PT2BagScorer):
+        if isinstance(self.model, (PT2BagScorer, VoteScorer)):
             scores = np.asarray(self.model.predict_chunks(chunks), dtype=float)
             return [float(round(s, 6)) for s in scores]
 

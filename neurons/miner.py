@@ -71,29 +71,31 @@ class Miner(BaseMinerNeuron):
             implementation_files=[
                 Path(__file__).resolve(),
                 Path(__file__).resolve().parent / "detector.py",
-                Path(__file__).resolve().parent / "pt2bag" / "pt_model.py",
-                Path(__file__).resolve().parent / "pt2bag" / "pt_features.py",
-                Path(__file__).resolve().parent / "pt2bag" / "serving.py",
-                Path(__file__).resolve().parent / "pt2bag" / "features_v2.py",
-                Path(__file__).resolve().parent / "pt2bag" / "schema_features.py",
-                repo_root / "scripts" / "miner" / "train_pt2.py",
+                Path(__file__).resolve().parent / "vote111" / "features.py",
+                Path(__file__).resolve().parent / "vote111" / "serving.py",
+                repo_root / "scripts" / "miner" / "train_vote111.py",
             ],
             defaults={
-                "model_name": "perturb-poker-2",
-                "model_version": str(detector_meta.get("feature_version", "pt.v1")),
-                "framework": f"xgboost+sklearn/{detector_meta.get('algorithm', 'PT2Bag')}",
+                "model_name": "poker111-vote",
+                "model_version": str(detector_meta.get("feature_version", "v5-sani-c2")),
+                "framework": f"sklearn-ensemble/{detector_meta.get('algorithm', 'VoteRankLogit')}",
                 "license": "MIT",
                 "repo_url": "https://github.com/dragonwarrior0225/poker",
                 "repo_commit": repo_commit,
                 "artifact_sha256": artifact_sha256,
                 "notes": (
-                    "UID138-style PT2Bag: 6 perturbed XGBoosts (72%) + "
-                    "2× PCA(50)→MLP(64) (28%), rank-blended; sanitize "
-                    "train==serve; live-size pool/subset aug; human-quantile "
-                    "threshold remap to 0.5 plus force top-K (15%) safety "
-                    "budget so every batch has scores >=0.5 (blocks reward "
-                    "0.0 from zero-TP threshold-sanity failure). Trained by "
-                    "scripts/miner/train_pt2.py."
+                    "UID111-style vote: ExtraTrees(700,d9) + RandomForest(700,d9) "
+                    "+ HistGradientBoosting(700,lr.03,d9) soft-vote (.45/.25/.30) "
+                    "over 180 scale-invariant behavioral/entropy/duplication-"
+                    "signature features (bb-normalized; excludes raw-magnitude "
+                    "columns that collapse on the live feed). Decision layer: "
+                    "rank01 the vote -> logit space -> anchor the batch's "
+                    "Q=0.7 quantile to a fixed training reference (margin=3.0) "
+                    "-> force exactly ceil(10%*n) chunks above 0.5 and push the "
+                    "rest below as a block (FLOOR/CAP), guaranteeing a positive "
+                    "call every batch (blocks reward 0.0 from zero-TP "
+                    "threshold-sanity failure) while staying self-calibrating "
+                    "to live batch drift. Trained by scripts/miner/train_vote111.py."
                 ),
                 "open_source": True,
                 "inference_mode": "remote",
