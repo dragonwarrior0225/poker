@@ -1,7 +1,12 @@
 pydantic>=2.6
 requests>=2.31
-bittensor>=9,<10
-async-substrate-interface<2
+# bittensor 9.x cannot encode the 2026-07-17 finney runtime upgrade (its
+# async-substrate-interface 1.x line dead-ends at 1.6.4); 10.x requires
+# asi 2.x, whose codec is provided by cyscale (replaces py-scale-codec —
+# the two conflict and must never be co-installed).
+bittensor>=10,<11
+async-substrate-interface>=2.2,<3
+cyscale
 python-dotenv>=1.0
 numpy>=1.24
 scikit-learn>=1.3

@@ -190,4 +190,29 @@ def check_config(cls, config: "bt.Config"):
 def config(cls) -> bt.Config:
     parser = argparse.ArgumentParser()
     cls.add_args(parser)
-    return bt.Config(parser=parser)
+    cfg = bt.Config(parser=parser)
+    # bittensor >= 10 stopped merging plain argparse defaults (and argv
+    # values) for args that are not registered through bt's own add_args
+    # groups: custom namespaces like `neuron.*` and scalars like `netuid`
+    # come back as None. Rebuild them from the parser itself so downstream
+    # code (check_config, BaseNeuron) keeps working on both 9.x and 10.x.
+    params, _ = parser.parse_known_args()
+    for key, value in vars(params).items():
+        explicit = value != parser.get_default(key)
+        parts = key.split(".")
+        node = cfg
+        for part in parts[:-1]:
+            if getattr(node, part, None) is None:
+                setattr(node, part, bt.Config())
+            node = getattr(node, part)
+        # Explicit argv values always win (bt 10 ignores argv even for its
+        # own groups, e.g. --wallet.name); parser defaults only fill gaps.
+        if explicit or getattr(node, parts[-1], None) is None:
+            setattr(node, parts[-1], value)
+    # check_config builds the neuron dir path from neuron.name, which no
+    # argparse group defines; give it a stable default.
+    if getattr(cfg, "neuron", None) is None:
+        cfg.neuron = bt.Config()
+    if getattr(cfg.neuron, "name", None) is None:
+        cfg.neuron.name = getattr(cls, "neuron_type", None) or cls.__name__.lower()
+    return cfg
