@@ -76,7 +76,10 @@ class Miner(BaseMinerNeuron):
                 repo_root / "scripts" / "miner" / "train_vote111.py",
             ],
             defaults={
-                "model_name": "poker111-vote",
+                # Artifact metadata wins so one repo can serve differently-
+                # branded models per UID (POKER44_MODEL_PATH); the literals
+                # keep uid38's poker111-vote manifest unchanged.
+                "model_name": str(detector_meta.get("model_name") or "poker111-vote"),
                 "model_version": str(detector_meta.get("feature_version", "v5-sani-c2")),
                 "framework": f"sklearn-ensemble/{detector_meta.get('algorithm', 'VoteRankLogit')}",
                 "license": "MIT",
@@ -96,6 +99,8 @@ class Miner(BaseMinerNeuron):
                     "call every batch (blocks reward 0.0 from zero-TP "
                     "threshold-sanity failure) while staying self-calibrating "
                     "to live batch drift. Trained by scripts/miner/train_vote111.py."
+                    if not detector_meta.get("manifest_notes")
+                    else str(detector_meta.get("manifest_notes"))
                 ),
                 "open_source": True,
                 "inference_mode": "remote",

@@ -25,7 +25,15 @@ from typing import Dict, List, Sequence
 
 import numpy as np
 
-MODEL_PATH = Path(__file__).parent / "models" / "detector.joblib"
+# Default artifact; a second miner process on the same repo can point at a
+# different artifact via POKER44_MODEL_PATH (multi-UID deployments) without
+# affecting the primary miner.
+import os as _os
+
+MODEL_PATH = Path(
+    _os.getenv("POKER44_MODEL_PATH", "")
+    or Path(__file__).parent / "models" / "detector.joblib"
+)
 FEATURE_VERSION = 3
 
 # Batch safety budget: force exactly the top-K (K = 15% of the batch, ranked
@@ -774,9 +782,10 @@ class DetectorModel:
         # live-size chunks. Do not re-segment or force a second safety
         # budget on top of either path.
         from neurons.pt2bag.serving import PT2BagScorer
+        from neurons.stack233.serving import Stack233Scorer
         from neurons.vote111.serving import VoteScorer
 
-        if isinstance(self.model, (PT2BagScorer, VoteScorer)):
+        if isinstance(self.model, (PT2BagScorer, Stack233Scorer, VoteScorer)):
             scores = np.asarray(self.model.predict_chunks(chunks), dtype=float)
             return [float(round(s, 6)) for s in scores]
 
