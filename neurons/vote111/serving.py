@@ -57,7 +57,11 @@ def _rows(chunks: Sequence[List[dict]]) -> np.ndarray:
     for c in chunks:
         feats = chunk_features(c)
         rows.append([feats.get(k, 0.0) for k in FEATURE_NAMES])
-    return np.asarray(rows, dtype=float)
+    # Parity with UID111 v9: non-finite feature cells are zeroed, never
+    # propagated into the vote.
+    return np.nan_to_num(
+        np.asarray(rows, dtype=float), nan=0.0, posinf=0.0, neginf=0.0
+    )
 
 
 def _pin_single_thread(est: Any) -> None:

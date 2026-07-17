@@ -83,7 +83,10 @@ def mat(chunks) -> np.ndarray:
     for c in chunks:
         feats = chunk_features(c)
         rows.append([feats.get(k, 0.0) for k in FEATURE_NAMES])
-    return np.asarray(rows, dtype=float)
+    # train == serve: same non-finite zeroing as vote111.serving._rows.
+    return np.nan_to_num(
+        np.asarray(rows, dtype=float), nan=0.0, posinf=0.0, neginf=0.0
+    )
 
 
 def build_members():
