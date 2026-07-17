@@ -71,9 +71,11 @@ class Miner(BaseMinerNeuron):
             implementation_files=[
                 Path(__file__).resolve(),
                 Path(__file__).resolve().parent / "detector.py",
-                Path(__file__).resolve().parent / "vote111" / "features.py",
-                Path(__file__).resolve().parent / "vote111" / "serving.py",
-                repo_root / "scripts" / "miner" / "train_vote111.py",
+                Path(__file__).resolve().parent / "stack233" / "features.py",
+                Path(__file__).resolve().parent / "stack233" / "serving.py",
+                Path(__file__).resolve().parent / "pt2bag" / "schema_features.py",
+                Path(__file__).resolve().parent / "pt2bag" / "features_v2.py",
+                repo_root / "scripts" / "miner" / "train_stack233.py",
             ],
             defaults={
                 # Artifact metadata wins so one repo can serve differently-

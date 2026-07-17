@@ -25,14 +25,13 @@ from typing import Dict, List, Sequence
 
 import numpy as np
 
-# Default artifact; a second miner process on the same repo can point at a
-# different artifact via POKER44_MODEL_PATH (multi-UID deployments) without
-# affecting the primary miner.
+# uid98 branch: the default artifact on this branch is the Stack233 model
+# (UID233-style stacked generalization). POKER44_MODEL_PATH still overrides.
 import os as _os
 
 MODEL_PATH = Path(
     _os.getenv("POKER44_MODEL_PATH", "")
-    or Path(__file__).parent / "models" / "detector.joblib"
+    or Path(__file__).parent / "models" / "detector233.joblib"
 )
 FEATURE_VERSION = 3
 
