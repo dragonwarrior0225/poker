@@ -66,10 +66,15 @@ def power_decay_budget(
 class Stack233Scorer:
     """Picklable scorer exposed as DetectorModel.model.predict_chunks."""
 
-    def __init__(self, stack: Any, feature_order: Sequence[str], threshold: float):
+    def __init__(self, stack: Any, feature_order: Sequence[str], threshold: float,
+                 max_frac: float = MAX_POS_FRAC):
         self.stack = stack
         self.feature_order = list(feature_order)
         self.threshold = float(threshold)
+        # Per-artifact positive-fraction budget (weight-controlled). Older
+        # artifacts without this attribute fall back to the module default
+        # via getattr in predict_chunks. Env override still wins for ops.
+        self.max_frac = float(max_frac)
 
     def _rows(self, chunks: Sequence[List[dict]]) -> np.ndarray:
         rows = []
@@ -90,7 +95,13 @@ class Stack233Scorer:
         try:
             X = batch_rank(self._rows(chunks))
             p = self.stack.predict_proba(X)[:, 1]
-            s = power_decay_budget(anchor_remap(np.asarray(p, dtype=float), self.threshold))
+            # Env override > per-artifact max_frac > module default.
+            frac = float(os.getenv("POKER44_MAX_POS_FRAC", "")
+                         or getattr(self, "max_frac", MAX_POS_FRAC))
+            s = power_decay_budget(
+                anchor_remap(np.asarray(p, dtype=float), self.threshold),
+                max_frac=frac,
+            )
             for i, chunk in enumerate(chunks):
                 if self._degenerate(chunk):
                     s[i] = EMPTY_CHUNK_SCORE

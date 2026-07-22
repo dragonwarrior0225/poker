@@ -25,14 +25,14 @@ from typing import Dict, List, Sequence
 
 import numpy as np
 
-# Default artifact; a second miner process on the same repo can point at a
-# different artifact via POKER44_MODEL_PATH (multi-UID deployments) without
-# affecting the primary miner.
+# uid38 default artifact: the Stack233 model (same as uid98). The prior
+# VoteRankLogit stays as detector.joblib and the Ens41 as detector41.joblib
+# for instant revert (flip this default back). POKER44_MODEL_PATH overrides.
 import os as _os
 
 MODEL_PATH = Path(
     _os.getenv("POKER44_MODEL_PATH", "")
-    or Path(__file__).parent / "models" / "detector.joblib"
+    or Path(__file__).parent / "models" / "detector233.joblib"
 )
 FEATURE_VERSION = 3
 
@@ -781,11 +781,14 @@ class DetectorModel:
         # cap, or rank/logit quantile-anchor + floor/cap) directly on whole
         # live-size chunks. Do not re-segment or force a second safety
         # budget on top of either path.
+        from neurons.ens41.serving import Ens41Scorer
         from neurons.pt2bag.serving import PT2BagScorer
         from neurons.stack233.serving import Stack233Scorer
         from neurons.vote111.serving import VoteScorer
 
-        if isinstance(self.model, (PT2BagScorer, Stack233Scorer, VoteScorer)):
+        if isinstance(
+            self.model, (Ens41Scorer, PT2BagScorer, Stack233Scorer, VoteScorer)
+        ):
             scores = np.asarray(self.model.predict_chunks(chunks), dtype=float)
             return [float(round(s, 6)) for s in scores]
 
