@@ -27,14 +27,18 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "miner"))
 
 from neurons.stack233.serving import Stack233Scorer  # noqa: E402
+import os
 from poker44.score.scoring import reward  # noqa: E402
 from train_stack233 import (  # noqa: E402
-    SEED, TARGET_FPR_GRID, featurize, load_examples, nested_oof,
-    rank_within_dates, sanitize,
+    SEED as _DEFAULT_SEED, TARGET_FPR_GRID, featurize, load_examples,
+    nested_oof, rank_within_dates, sanitize,
 )
 from upgrade_stack233_ranker import live_units  # noqa: E402
 
 warnings.filterwarnings("ignore")
+# Per-miner seed override: uid98 and uid109 must NOT be numerically identical
+# on a winner-take-all subnet. Set POKER44_TRAIN_SEED to decorrelate.
+SEED = int(os.getenv("POKER44_TRAIN_SEED", "") or _DEFAULT_SEED)
 WF = 3
 NJ = 2          # lower parallelism -> lower peak RAM
 MAX_FRAC = 0.15
@@ -133,6 +137,7 @@ def main():
         "trained_through": ud[-1], "n_train": int(len(y)),
         "live_capture_pos_fraction": float(np.mean(fr)) if fr else None,
         "trained_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "train_seed": SEED,
     })
     joblib.dump({"model": scorer, "threshold": thr, "metadata": md}, OUT_PATH)
     sz = OUT_PATH.stat().st_size / 1048576

@@ -214,3 +214,5 @@ hands_for_validator/poker_hands_from_rar.json
 wandb/
 benchmark_cache/
 data/
+neurons/models/detector233.autopilot_bak.joblib
+logs/
